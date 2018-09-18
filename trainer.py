@@ -87,17 +87,19 @@ class PITrainer(object):
         self.nnet.train()
         logger.info("Training...")
         tot_loss = num_batch = 0
-        for input_sizes, nnet_input, source_attr, target_attr in dataset:
+        for input_sizes, nnet_input, nnet_adapt, source_attr, target_attr in dataset:
             num_batch += 1
             nnet_input = packed_sequence_cuda(nnet_input) if isinstance(
                 nnet_input, PackedSequence) else nnet_input.to(device)
+            nnet_adapt = packed_sequence_cuda(nnet_adapt) if isinstance(
+                nnet_adapt, PackedSequence) else nnet_adapt.to(device)
 
             self.optimizer.zero_grad()
 
             if self.disturb:
                 self.nnet.disturb(self.disturb)
 
-            masks = self.nnet(nnet_input)
+            masks = self.nnet(nnet_input, nnet_adapt)
             cur_loss = self.permutate_loss(masks, input_sizes, source_attr,
                                            target_attr)
             tot_loss += cur_loss.item()
@@ -117,11 +119,14 @@ class PITrainer(object):
         tot_loss = num_batch = 0
         # do not need to keep gradient
         with th.no_grad():
-            for input_sizes, nnet_input, source_attr, target_attr in dataset:
+            for input_sizes, nnet_input, nnet_adapt, source_attr, target_attr in dataset:
                 num_batch += 1
                 nnet_input = packed_sequence_cuda(nnet_input) if isinstance(
                     nnet_input, PackedSequence) else nnet_input.to(device)
-                masks = self.nnet(nnet_input)
+                nnet_adapt = packed_sequence_cuda(nnet_adapt) if isinstance(
+                nnet_adapt, PackedSequence) else nnet_adapt.to(device)
+
+                masks = self.nnet(nnet_input, nnet_adapt)
                 cur_loss = self.permutate_loss(masks, input_sizes, source_attr,
                                                target_attr)
                 tot_loss += cur_loss.item()

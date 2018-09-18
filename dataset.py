@@ -54,8 +54,9 @@ class SpectrogramReader(object):
 
 
 class Dataset(object):
-    def __init__(self, mixture_reader, targets_reader_list):
+    def __init__(self, mixture_reader, adapt_reader, targets_reader_list):
         self.mixture_reader = mixture_reader
+        self.adapt_reader = adapt_reader
         self.keys_list = mixture_reader.wave_keys
         self.targets_reader_list = targets_reader_list
         self.num_spks = len(targets_reader_list)
@@ -73,10 +74,10 @@ class Dataset(object):
         """
             Return a tuple like (matrix, [matrix, ...])
         """
-        if key not in self.mixture_reader or not self._has_target(key):
+        if key not in self.mixture_reader or key not in self.adapt_reader or not self._has_target(key):
             raise KeyError("Missing targets or mixture")
         target_list = [reader[key] for reader in self.targets_reader_list]
-        return (self.mixture_reader[key], target_list)
+        return (self.mixture_reader[key], self.adapt_reader[key], target_list)
 
     def _index_by_num(self, num):
         """
@@ -181,7 +182,7 @@ class DataLoader(object):
         else:
             return len(self.dataset) // self.batch_size + 1
 
-    def _transform(self, mixture_specs, targets_specs_list):
+    def _transform(self, mixture_specs, adapt_specs, targets_specs_list):
         """
         Transform original spectrogram
             If mixture_specs is a complex object, it means PAM will be used for training
@@ -201,11 +202,15 @@ class DataLoader(object):
         # NOTE: mixture_specs may be complex or real
         input_spectra = np.abs(mixture_specs) if np.iscomplexobj(
             mixture_specs) else mixture_specs
+        input_adapt_spectra = np.abs(adapt_specs) if np.iscomplexobj(
+            adapt_specs) else adapt_specs
         # apply_log and cmvn, for nnet input
         if self.apply_log:
             input_spectra = np.log(np.maximum(input_spectra, EPSILON))
+            input_adapt_spectra = np.log(np.maximum(input_adapt_spectra, EPSILON))
         if self.mvn_dict:
             input_spectra = apply_cmvn(input_spectra, self.mvn_dict)
+            input_adapt_spectra = apply_cmvn(input_adapt_spectra, self.mvn_dict)
 
         # using dict to pack infomation needed in loss
         source_attr = {}
@@ -234,6 +239,7 @@ class DataLoader(object):
         return {
             "num_frames": mixture_specs.shape[0],
             "feature": th.tensor(input_spectra, dtype=th.float32),
+            "adapt_utt": th.tensor(input_adapt_spectra, dtype=th.float32),
             "source_attr": source_attr,
             "target_attr": target_attr
         }
@@ -260,11 +266,12 @@ class DataLoader(object):
 
         # sorted by utterance
         dict_list = sorted(
-            [self._transform(s, t) for s, t in self.dataset[index]],
+            [self._transform(s, adapt, t) for s, adapt, t in self.dataset[index]],
             key=lambda x: x["num_frames"],
             reverse=True)
         # pack tensor for network input
         input_feats = pack_sequence([d["feature"] for d in dict_list])
+        input_adapt = pack_sequence([d["adapt_utt"] for d in dict_list])
         input_sizes = th.tensor(
             [d["num_frames"] for d in dict_list], dtype=th.float32)
 
@@ -288,7 +295,7 @@ class DataLoader(object):
                 for s in range(self.num_spks)
             ]
 
-        return input_sizes, input_feats, source_attr, target_attr
+        return input_sizes, input_feats, input_adapt, source_attr, target_attr
 
     def __iter__(self):
         sampler = BatchSampler(

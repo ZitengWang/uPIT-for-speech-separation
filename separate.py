@@ -29,7 +29,7 @@ class Separator(object):
             th.load(state_dict, map_location=self.location))
         self.nnet.eval()
 
-    def seperate(self, spectra, cmvn=None, apply_log=True):
+    def seperate(self, spectra, spectra_adapt, cmvn=None, apply_log=True):
         """
             spectra: stft complex results T x F
             cmvn: python dict contains global mean/std
@@ -43,9 +43,16 @@ class Separator(object):
         # apply cmvn or not
         input_spectra = apply_cmvn(input_spectra,
                                    cmvn) if cmvn else input_spectra
+        
+        input_spectra_adapt = np.log(np.maximum(
+            np.abs(spectra_adapt), EPSILON)) if apply_log else np.abs(spectra_adapt)
+        # apply cmvn or not
+        input_spectra_adapt = apply_cmvn(input_spectra_adapt,
+                                   cmvn) if cmvn else input_spectra_adapt
 
         out_masks = self.nnet(
             th.tensor(input_spectra, dtype=th.float32, device=self.location),
+            th.tensor(input_spectra_adapt, dtype=th.float32, device=self.location),
             train=False)
         spk_masks = [spk_mask.cpu().data.numpy() for spk_mask in out_masks]
         return spk_masks, [spectra * spk_mask for spk_mask in spk_masks]
@@ -75,6 +82,7 @@ def run(args):
     separator = Separator(dcnet, args.state_dict, cuda=args.cuda)
 
     utt_dict = parse_scps(args.wave_scp)
+    utt_adapt_dict = parse_scps(args.adapt_scp)
     num_utts = 0
     for key, utt in utt_dict.items():
         try:
@@ -85,6 +93,14 @@ def run(args):
                 window=window,
                 center=True,
                 return_samps=True)
+            samps_adapt, stft_mat_adapt = stft(
+                utt_adapt_dict[key],
+                frame_length=frame_length,
+                frame_shift=frame_shift,
+                window=window,
+                center=True,
+                return_samps=True
+            )
         except FileNotFoundError:
             print("Skip utterance {}... not found".format(key))
             continue
@@ -92,7 +108,7 @@ def run(args):
         num_utts += 1
         norm = np.linalg.norm(samps, np.inf)
         spk_mask, spk_spectrogram = separator.seperate(
-            stft_mat, cmvn=dict_mvn, apply_log=apply_log)
+            stft_mat, stft_mat_adapt, cmvn=dict_mvn, apply_log=apply_log)
 
         for index, stft_mat in enumerate(spk_spectrogram):
             istft(
@@ -104,7 +120,7 @@ def run(args):
                 window=window,
                 center=True,
                 norm=norm,
-                fs=8000,
+                fs=16000,
                 nsamps=samps.size)
             if args.dump_mask:
                 sio.savemat(
@@ -126,6 +142,10 @@ if __name__ == '__main__':
         "wave_scp",
         type=str,
         help="Location of input wave scripts in kaldi format")
+    parser.add_argument(
+        "adapt_scp",
+        type=str,
+        help="Location of speaker adaptation wave scripts in kaldi format")
     parser.add_argument(
         "--cuda",
         default=False,
