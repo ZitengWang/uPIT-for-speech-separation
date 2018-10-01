@@ -32,12 +32,12 @@ class PITNet(th.nn.Module):
         self.drops = th.nn.Dropout(p=dropout)
         # one BLSTM layer and two FF layers
         self.ff1 = th.nn.Linear(hidden_size * 2 if bidirectional else hidden_size, hidden_size * 2)
-        self.ff2 = th.nn.Linear(hidden_size * 2, hidden_size)
+        self.ff2 = th.nn.Linear(hidden_size * 2, hidden_size * 2)
         self.linear = th.nn.ModuleList([
-            th.nn.Linear(hidden_size, num_bins)
+            th.nn.Linear(hidden_size * 2, num_bins)
             for _ in range(self.num_spks)
         ])
-        # auxilary network for speaker adaptation
+        # auxilary network for adaptation
         self.adapt1 = th.nn.Linear(num_bins, hidden_size_adapt)
         self.adapt2 = th.nn.Linear(hidden_size_adapt, hidden_size_adapt)
         self.adapt_sigmoid = th.nn.Linear(hidden_size_adapt, hidden_size * 2)
@@ -59,8 +59,10 @@ class PITNet(th.nn.Module):
         if is_packed:
             utt, _ = pad_packed_sequence(utt, batch_first=True)
         utt = self.adapt1(utt)
+        utt = th.nn.functional.relu(utt)
         utt = self.adapt2(utt)
-        utt = 2*self.adapt_sigmoid(utt)
+        utt = th.nn.functional.relu(utt)
+        utt = 2 * th.nn.functional.sigmoid(self.adapt_sigmoid(utt))
         # averaging over time 
         utt_info = th.mean(utt, 1, True)
 
@@ -75,11 +77,11 @@ class PITNet(th.nn.Module):
             x, _ = pad_packed_sequence(x, batch_first=True)
         x = self.drops(x)
         x = self.ff1(x)
-        # adapt this layer like LHUC
+        # adapt this layer
         x = th.nn.functional.relu(x * utt_info)
         x = self.ff2(x)
         x = th.nn.functional.relu(x)
-
+        
         m = []
         for linear in self.linear:
             y = linear(x)
